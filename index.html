@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Poo Patrol</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700;9..144,900&family=Spline+Sans+Mono:wght@400;500&display=swap');
+
+  :root{
+    --ink:#1c2419;
+    --paper:#f3efe3;
+    --moss:#5a7d3c;
+    --moss-dk:#415c29;
+    --clay:#b5582f;
+    --gold:#d8a838;
+    --line:#cdc6b2;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{
+    font-family:'Spline Sans Mono',monospace;
+    background:var(--paper);
+    color:var(--ink);
+    background-image:radial-gradient(circle at 1px 1px, rgba(28,36,25,.07) 1px, transparent 0);
+    background-size:22px 22px;
+    overflow:hidden;
+  }
+  #app{display:flex;flex-direction:column;height:100vh}
+
+  header{
+    padding:14px 20px;border-bottom:2px solid var(--ink);
+    display:flex;align-items:center;justify-content:space-between;gap:12px;
+    background:var(--paper);z-index:600;flex-wrap:wrap;
+  }
+  .brand{display:flex;align-items:center;gap:12px}
+  .logo{
+    width:42px;height:42px;border-radius:50%;background:var(--moss);
+    display:grid;place-items:center;font-size:22px;border:2px solid var(--ink);
+    box-shadow:3px 3px 0 var(--ink);flex-shrink:0;
+  }
+  h1{font-family:'Fraunces',serif;font-weight:900;font-size:26px;line-height:.9;letter-spacing:-.5px}
+  h1 small{display:block;font-family:'Spline Sans Mono';font-weight:400;font-size:11px;letter-spacing:2px;text-transform:uppercase;color:var(--moss-dk);margin-top:3px}
+  .count{
+    font-family:'Fraunces',serif;font-weight:700;font-size:13px;
+    background:var(--ink);color:var(--paper);padding:6px 12px;border-radius:20px;
+  }
+
+  #map{flex:1;width:100%;z-index:1}
+  .leaflet-container{background:#dfdac9;font-family:'Spline Sans Mono',monospace}
+
+  .fab{
+    position:absolute;bottom:26px;left:50%;transform:translateX(-50%);
+    z-index:500;background:var(--clay);color:#fff;border:2px solid var(--ink);
+    font-family:'Fraunces',serif;font-weight:700;font-size:16px;
+    padding:14px 26px;border-radius:40px;cursor:pointer;
+    box-shadow:4px 4px 0 var(--ink);display:flex;align-items:center;gap:8px;
+    transition:transform .12s, box-shadow .12s;
+  }
+  .fab:active{transform:translateX(-50%) translate(2px,2px);box-shadow:2px 2px 0 var(--ink)}
+  .fab.armed{background:var(--moss)}
+
+  .banner{
+    position:absolute;top:14px;left:50%;transform:translateX(-50%);z-index:500;
+    background:var(--gold);color:var(--ink);border:2px solid var(--ink);
+    padding:9px 18px;border-radius:30px;font-size:13px;font-weight:500;
+    box-shadow:3px 3px 0 var(--ink);white-space:nowrap;max-width:90vw;
+    overflow:hidden;text-overflow:ellipsis;
+    animation:pop .3s ease;
+  }
+  .banner.err{background:var(--clay);color:#fff}
+  @keyframes pop{from{transform:translateX(-50%) scale(.8);opacity:0}to{transform:translateX(-50%) scale(1);opacity:1}}
+
+  .overlay{
+    position:fixed;inset:0;background:rgba(28,36,25,.55);z-index:1000;
+    display:none;align-items:flex-end;justify-content:center;
+  }
+  .overlay.show{display:flex}
+  .sheet{
+    background:var(--paper);width:100%;max-width:480px;
+    border:2px solid var(--ink);border-bottom:none;
+    border-radius:20px 20px 0 0;padding:22px;
+    box-shadow:0 -6px 0 var(--ink);
+    animation:slideup .25s ease;max-height:88vh;overflow:auto;
+  }
+  @keyframes slideup{from{transform:translateY(100%)}to{transform:translateY(0)}}
+  .sheet h2{font-family:'Fraunces',serif;font-weight:900;font-size:22px;margin-bottom:4px}
+  .sheet p.sub{font-size:12px;color:var(--moss-dk);margin-bottom:16px}
+
+  label{display:block;font-size:12px;text-transform:uppercase;letter-spacing:1px;margin:14px 0 6px;font-weight:500}
+  select,textarea{
+    width:100%;font-family:inherit;font-size:14px;padding:10px;
+    border:2px solid var(--ink);border-radius:10px;background:#fff;color:var(--ink);
+  }
+  textarea{resize:vertical;min-height:54px}
+
+  .photo-zone{
+    border:2px dashed var(--ink);border-radius:12px;padding:18px;text-align:center;
+    cursor:pointer;background:#fff;font-size:13px;color:var(--moss-dk);
+  }
+  .photo-zone img{max-width:100%;border-radius:8px;margin-top:6px;display:block}
+  input[type=file]{display:none}
+
+  .actions{display:flex;gap:10px;margin-top:20px}
+  button.btn{
+    flex:1;font-family:'Fraunces',serif;font-weight:700;font-size:15px;
+    padding:13px;border:2px solid var(--ink);border-radius:12px;cursor:pointer;
+    box-shadow:3px 3px 0 var(--ink);transition:transform .1s,box-shadow .1s;
+  }
+  button.btn:active{transform:translate(2px,2px);box-shadow:1px 1px 0 var(--ink)}
+  button.btn:disabled{opacity:.5;cursor:wait}
+  .btn-cancel{background:var(--paper);color:var(--ink)}
+  .btn-submit{background:var(--moss);color:#fff}
+
+  .pop b{font-family:'Fraunces',serif;font-size:14px}
+  .pop img{width:100%;border-radius:6px;margin-top:6px}
+  .pop .meta{font-size:11px;color:#666;margin-top:4px}
+  .pin{font-size:26px;filter:drop-shadow(1px 2px 1px rgba(0,0,0,.4));text-align:center;line-height:1}
+
+  .config-warn{
+    position:fixed;inset:0;background:var(--paper);z-index:2000;
+    display:none;flex-direction:column;align-items:center;justify-content:center;
+    text-align:center;padding:30px;gap:14px;
+  }
+  .config-warn.show{display:flex}
+  .config-warn h2{font-family:'Fraunces',serif;font-weight:900;font-size:24px}
+  .config-warn code{background:var(--ink);color:var(--paper);padding:2px 8px;border-radius:6px;font-size:13px}
+  .config-warn p{max-width:420px;font-size:14px;line-height:1.5}
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <div class="brand">
+      <div class="logo">💩</div>
+      <h1>Poo Patrol<small>Community Hazard Map</small></h1>
+    </div>
+    <div class="count" id="count">…</div>
+  </header>
+  <div id="map"></div>
+  <div class="fab" id="fab">📍 Report a poo</div>
+</div>
+
+<div class="overlay" id="overlay">
+  <div class="sheet">
+    <h2>New report</h2>
+    <p class="sub" id="coords">—</p>
+
+    <label>Severity</label>
+    <select id="sev">
+      <option value="🟢 Minor">🟢 Minor — small, avoidable</option>
+      <option value="🟡 Moderate" selected>🟡 Moderate — watch your step</option>
+      <option value="🔴 Hazard">🔴 Hazard — biohazard, call backup</option>
+    </select>
+
+    <label>Note (optional)</label>
+    <textarea id="note" placeholder="e.g. next to the bench, near the big oak..."></textarea>
+
+    <label>Photo (optional)</label>
+    <div class="photo-zone" id="photoZone">
+      <span id="photoText">📷 Tap to add a photo</span>
+      <input type="file" id="photoInput" accept="image/*" capture="environment">
+    </div>
+
+    <div class="actions">
+      <button class="btn btn-cancel" id="cancel">Cancel</button>
+      <button class="btn btn-submit" id="submit">Submit</button>
+    </div>
+  </div>
+</div>
+
+<div class="config-warn" id="configWarn">
+  <div class="logo" style="width:60px;height:60px;font-size:32px">💩</div>
+  <h2>Almost there!</h2>
+  <p>Open this file and paste your Supabase <code>URL</code> and <code>anon key</code> into the
+  <code>SUPABASE_URL</code> and <code>SUPABASE_ANON_KEY</code> values at the top of the script.</p>
+</div>
+
+<script>
+/* ============================================================
+   1. PASTE YOUR SUPABASE CREDENTIALS HERE
+   Find them in: Project Settings → API
+   ============================================================ */
+const SUPABASE_URL      = "https://vmoltbdihnkxepvtyobu.supabase.co";   // e.g. https://abcd1234.supabase.co
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZtb2x0YmRpaG5reGVwdnR5b2J1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA1MDA0NzQsImV4cCI6MjA5NjA3NjQ3NH0.spDLNRc3jyH0XKvRcthLXKvhkgUmQuV3jv4C8MYwLps";
+/* ============================================================ */
+
+const configured = SUPABASE_URL.startsWith("http") && SUPABASE_ANON_KEY.length > 20;
+let sb = null;
+if (configured) {
+  sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+} else {
+  document.getElementById('configWarn').classList.add('show');
+}
+
+const map = L.map('map', {zoomControl:true}).setView([51.5074,-0.1278], 14);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
+  attribution:'© OpenStreetMap', maxZoom:19
+}).addTo(map);
+
+navigator.geolocation && navigator.geolocation.getCurrentPosition(
+  p => map.setView([p.coords.latitude, p.coords.longitude], 16),
+  () => {}, {timeout:5000}
+);
+
+let armed = false, picked = null, photoBlob = null, tempMarker = null;
+const fab = document.getElementById('fab');
+const overlay = document.getElementById('overlay');
+
+function pinIcon(emoji){
+  return L.divIcon({html:`<div class="pin">${emoji}</div>`, className:'', iconSize:[30,30], iconAnchor:[15,28]});
+}
+function sevEmoji(s){return s.split(' ')[0];}
+
+fab.addEventListener('click', ()=>{
+  armed = !armed;
+  fab.classList.toggle('armed', armed);
+  fab.textContent = armed ? '👆 Tap the map to place' : '📍 Report a poo';
+  if(!armed) banner('Cancelled');
+});
+
+let bannerTimer;
+function banner(text, isErr){
+  clearTimeout(bannerTimer);
+  let b = document.querySelector('.banner');
+  if(!b){b=document.createElement('div');b.className='banner';document.getElementById('app').appendChild(b);}
+  b.className = 'banner' + (isErr ? ' err' : '');
+  b.textContent = text;
+  bannerTimer = setTimeout(()=>b.remove(), isErr ? 4000 : 2200);
+}
+
+map.on('click', e=>{
+  if(!armed) return;
+  picked = e.latlng;
+  if(tempMarker) map.removeLayer(tempMarker);
+  tempMarker = L.marker(picked, {icon:pinIcon('📌')}).addTo(map);
+  document.getElementById('coords').textContent =
+    `${picked.lat.toFixed(5)}, ${picked.lng.toFixed(5)}`;
+  overlay.classList.add('show');
+});
+
+// photo handling with compression -> Blob for upload
+const photoInput = document.getElementById('photoInput');
+document.getElementById('photoZone').addEventListener('click', ()=>photoInput.click());
+photoInput.addEventListener('change', e=>{
+  const file = e.target.files[0];
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = ev=>{
+    const img = new Image();
+    img.onload = ()=>{
+      const max = 1100;
+      let {width:w, height:h} = img;
+      if(w>h && w>max){h=h*max/w; w=max;} else if(h>max){w=w*max/h; h=max;}
+      const c = document.createElement('canvas');
+      c.width=w; c.height=h;
+      c.getContext('2d').drawImage(img,0,0,w,h);
+      c.toBlob(blob=>{
+        photoBlob = blob;
+        document.getElementById('photoText').textContent = '✅ Photo added — tap to change';
+        let prev = document.querySelector('#photoZone img');
+        if(prev) prev.remove();
+        const el = document.createElement('img'); el.src = URL.createObjectURL(blob);
+        document.getElementById('photoZone').appendChild(el);
+      }, 'image/jpeg', 0.65);
+    };
+    img.src = ev.target.result;
+  };
+  reader.readAsDataURL(file);
+});
+
+function closeSheet(){
+  overlay.classList.remove('show');
+  if(tempMarker){map.removeLayer(tempMarker);tempMarker=null;}
+  photoBlob=null; picked=null;
+  document.getElementById('note').value='';
+  document.getElementById('sev').selectedIndex=1;
+  document.getElementById('photoText').textContent='📷 Tap to add a photo';
+  let prev=document.querySelector('#photoZone img'); if(prev) prev.remove();
+  armed=false; fab.classList.remove('armed'); fab.textContent='📍 Report a poo';
+}
+document.getElementById('cancel').addEventListener('click', closeSheet);
+
+const submitBtn = document.getElementById('submit');
+submitBtn.addEventListener('click', async ()=>{
+  if(!picked || !sb) return;
+  submitBtn.disabled = true;
+  submitBtn.textContent = 'Saving…';
+  try{
+    let photo_url = null;
+
+    // 1. upload photo if present
+    if(photoBlob){
+      const path = `${Date.now()}_${Math.random().toString(36).slice(2,8)}.jpg`;
+      const { error: upErr } = await sb.storage.from('photos')
+        .upload(path, photoBlob, {contentType:'image/jpeg'});
+      if(upErr) throw upErr;
+      const { data:pub } = sb.storage.from('photos').getPublicUrl(path);
+      photo_url = pub.publicUrl;
+    }
+
+    // 2. insert report row
+    const { data, error } = await sb.from('reports').insert({
+      lat:picked.lat, lng:picked.lng,
+      sev:document.getElementById('sev').value,
+      note:document.getElementById('note').value.trim() || null,
+      photo_url
+    }).select().single();
+    if(error) throw error;
+
+    addMarker(data);
+    total++; refreshCount();
+    banner('Reported. Thanks, patroller! 🫡');
+    closeSheet();
+  }catch(err){
+    console.error(err);
+    banner('Save failed: ' + (err.message || 'unknown error'), true);
+  }finally{
+    submitBtn.disabled = false;
+    submitBtn.textContent = 'Submit';
+  }
+});
+
+function addMarker(r){
+  const m = L.marker([r.lat,r.lng], {icon:pinIcon(sevEmoji(r.sev))}).addTo(map);
+  const when = new Date(r.created_at || Date.now()).toLocaleString();
+  let html = `<div class="pop"><b>${r.sev}</b>`;
+  if(r.note) html += `<div>${escapeHtml(r.note)}</div>`;
+  if(r.photo_url) html += `<img src="${r.photo_url}">`;
+  html += `<div class="meta">${when}</div></div>`;
+  m.bindPopup(html, {maxWidth:240});
+}
+function escapeHtml(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+
+let total = 0;
+function refreshCount(){
+  document.getElementById('count').textContent = total + (total===1?' report':' reports');
+}
+
+async function loadAll(){
+  if(!sb){document.getElementById('count').textContent='—';return;}
+  try{
+    const { data, error } = await sb.from('reports')
+      .select('*').order('created_at',{ascending:false}).limit(2000);
+    if(error) throw error;
+    data.forEach(addMarker);
+    total = data.length;
+    refreshCount();
+  }catch(err){
+    console.error(err);
+    banner('Could not load reports: ' + (err.message||''), true);
+    document.getElementById('count').textContent='—';
+  }
+}
+loadAll();
+</script>
+</body>
+</html>
