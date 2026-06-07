@@ -51,6 +51,7 @@
 
   #map{flex:1;width:100%;z-index:1}
   .leaflet-container{background:#dfdac9;font-family:'Spline Sans Mono',monospace}
+  .leaflet-top.leaflet-left{margin-top:64px}
 
   .fab{
     position:absolute;bottom:26px;left:50%;transform:translateX(-50%);
@@ -64,7 +65,7 @@
   .fab.armed{background:var(--moss)}
 
   .banner{
-    position:absolute;top:14px;left:50%;transform:translateX(-50%);z-index:500;
+    position:absolute;top:70px;left:50%;transform:translateX(-50%);z-index:500;
     background:var(--gold);color:var(--ink);border:2px solid var(--ink);
     padding:9px 18px;border-radius:30px;font-size:13px;font-weight:500;
     box-shadow:3px 3px 0 var(--ink);white-space:nowrap;max-width:90vw;
@@ -73,6 +74,41 @@
   }
   .banner.err{background:var(--clay);color:#fff}
   @keyframes pop{from{transform:translateX(-50%) scale(.8);opacity:0}to{transform:translateX(-50%) scale(1);opacity:1}}
+
+  /* search bar */
+  .searchbar{
+    position:absolute;top:14px;left:14px;right:14px;z-index:500;
+    display:flex;gap:8px;max-width:520px;margin:0 auto;
+  }
+  .searchbar form{flex:1;display:flex;position:relative}
+  .searchbar input{
+    width:100%;font-family:inherit;font-size:14px;padding:11px 14px;
+    border:2px solid var(--ink);border-radius:30px;background:var(--paper);
+    color:var(--ink);box-shadow:3px 3px 0 var(--ink);
+  }
+  .searchbar input:focus{outline:none;background:#fff}
+  .searchbar button{
+    border:2px solid var(--ink);background:var(--ink);color:var(--paper);
+    border-radius:50%;width:46px;height:46px;flex-shrink:0;cursor:pointer;
+    font-size:18px;box-shadow:3px 3px 0 var(--moss-dk);transition:transform .1s,box-shadow .1s;
+  }
+  .searchbar button:active{transform:translate(2px,2px);box-shadow:1px 1px 0 var(--moss-dk)}
+  .searchbar button.locate{background:var(--gold);color:var(--ink)}
+  /* search results dropdown */
+  .results{
+    position:absolute;top:52px;left:0;right:0;background:var(--paper);
+    border:2px solid var(--ink);border-radius:12px;box-shadow:4px 4px 0 var(--ink);
+    overflow:hidden;display:none;max-height:240px;overflow-y:auto;
+  }
+  .results.show{display:block}
+  .results div{padding:10px 14px;font-size:13px;cursor:pointer;border-bottom:1px solid var(--line)}
+  .results div:last-child{border-bottom:none}
+  .results div:hover{background:var(--gold)}
+  .results .muted{color:var(--moss-dk);cursor:default}
+  .results .muted:hover{background:var(--paper)}
+  .spin{display:inline-block;width:16px;height:16px;border:2px solid var(--ink);
+    border-top-color:transparent;border-radius:50%;animation:spin .7s linear infinite;vertical-align:middle}
+  @keyframes spin{to{transform:rotate(360deg)}}
 
   .overlay{
     position:fixed;inset:0;background:rgba(28,36,25,.55);z-index:1000;
@@ -141,6 +177,13 @@
     <div class="count" id="count">…</div>
   </header>
   <div id="map"></div>
+  <div class="searchbar">
+    <form id="searchForm" autocomplete="off">
+      <input type="text" id="searchInput" placeholder="🔍 Search a place or address…">
+      <div class="results" id="results"></div>
+    </form>
+    <button type="button" class="locate" id="locateBtn" title="Use my location">📍</button>
+  </div>
   <div class="fab" id="fab">📍 Report a poo</div>
 </div>
 
@@ -232,14 +275,88 @@ function banner(text, isErr){
   bannerTimer = setTimeout(()=>b.remove(), isErr ? 4000 : 2200);
 }
 
+// open the report sheet at a given location (shared by map-tap and "use my location")
+function placePin(latlng){
+  picked = latlng;
+  if(tempMarker) map.removeLayer(tempMarker);
+  tempMarker = L.marker(picked, {icon:pinIcon('📌'), draggable:true}).addTo(map);
+  tempMarker.on('dragend', ev=>{
+    picked = ev.target.getLatLng();
+    document.getElementById('coords').textContent =
+      `${picked.lat.toFixed(5)}, ${picked.lng.toFixed(5)}  ·  drag pin to adjust`;
+  });
+  document.getElementById('coords').textContent =
+    `${picked.lat.toFixed(5)}, ${picked.lng.toFixed(5)}  ·  drag pin to adjust`;
+  overlay.classList.add('show');
+}
+
 map.on('click', e=>{
   if(!armed) return;
-  picked = e.latlng;
-  if(tempMarker) map.removeLayer(tempMarker);
-  tempMarker = L.marker(picked, {icon:pinIcon('📌')}).addTo(map);
-  document.getElementById('coords').textContent =
-    `${picked.lat.toFixed(5)}, ${picked.lng.toFixed(5)}`;
-  overlay.classList.add('show');
+  placePin(e.latlng);
+});
+
+// "Use my location" button — drops the pin exactly where the user is
+const locateBtn = document.getElementById('locateBtn');
+locateBtn.addEventListener('click', ()=>{
+  if(!navigator.geolocation){ banner('Location not supported on this device', true); return; }
+  locateBtn.disabled = true;
+  const prev = locateBtn.textContent;
+  locateBtn.innerHTML = '<span class="spin"></span>';
+  navigator.geolocation.getCurrentPosition(
+    p=>{
+      const ll = L.latLng(p.coords.latitude, p.coords.longitude);
+      map.setView(ll, 18);
+      armed = true; fab.classList.add('armed'); fab.textContent = '👆 Tap the map to place';
+      placePin(ll);
+      banner('Pin placed at your location — drag to fine-tune');
+      locateBtn.disabled = false; locateBtn.textContent = prev;
+    },
+    err=>{
+      banner(err.code===1 ? 'Location permission denied' : 'Could not get your location', true);
+      locateBtn.disabled = false; locateBtn.textContent = prev;
+    },
+    {enableHighAccuracy:true, timeout:10000, maximumAge:0}
+  );
+});
+
+// Address / place search via OpenStreetMap Nominatim (free, no key)
+const searchForm = document.getElementById('searchForm');
+const searchInput = document.getElementById('searchInput');
+const results = document.getElementById('results');
+
+function hideResults(){ results.classList.remove('show'); results.innerHTML=''; }
+
+searchForm.addEventListener('submit', async e=>{
+  e.preventDefault();
+  const q = searchInput.value.trim();
+  if(!q) return;
+  results.classList.add('show');
+  results.innerHTML = '<div class="muted"><span class="spin"></span> Searching…</div>';
+  try{
+    const url = 'https://nominatim.openstreetmap.org/search?format=json&limit=6&q=' + encodeURIComponent(q);
+    const res = await fetch(url, {headers:{'Accept':'application/json'}});
+    const data = await res.json();
+    if(!data.length){ results.innerHTML = '<div class="muted">No places found</div>'; return; }
+    results.innerHTML = '';
+    data.forEach(place=>{
+      const row = document.createElement('div');
+      row.textContent = place.display_name;
+      row.addEventListener('click', ()=>{
+        map.setView([parseFloat(place.lat), parseFloat(place.lon)], 17);
+        hideResults();
+        searchInput.value = place.display_name.split(',')[0];
+      });
+      results.appendChild(row);
+    });
+  }catch(err){
+    console.error(err);
+    results.innerHTML = '<div class="muted">Search failed — try again</div>';
+  }
+});
+
+// close the results dropdown when tapping elsewhere
+document.addEventListener('click', e=>{
+  if(!searchForm.contains(e.target)) hideResults();
 });
 
 // photo handling with compression -> Blob for upload
