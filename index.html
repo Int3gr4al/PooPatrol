@@ -75,9 +75,14 @@
   #map{flex:1;width:100%;z-index:1;position:relative}
   .leaflet-container{background:#dfdac9;font-family:'Spline Sans Mono',monospace}
   .leaflet-top.leaflet-left{margin-top:64px}
+  /* keep attribution compact and clear of the report button */
+  .leaflet-control-attribution{
+    font-size:9px;line-height:1.2;max-width:55vw;
+    background:rgba(243,239,227,0.85)!important;
+  }
 
   .fab{
-    position:absolute;bottom:calc(26px + env(safe-area-inset-bottom, 0px));
+    position:absolute;bottom:calc(40px + env(safe-area-inset-bottom, 0px));
     left:50%;transform:translateX(-50%);
     z-index:1000;background:var(--clay);color:#fff;border:2px solid var(--ink);
     font-family:'Fraunces',serif;font-weight:700;font-size:16px;
@@ -150,9 +155,9 @@
   .hl-ends{font-size:9px;color:var(--moss-dk);display:flex;justify-content:space-between}
   /* by-council tally panel */
   .council-panel{
-    position:absolute;left:14px;bottom:calc(14px + env(safe-area-inset-bottom,0px));z-index:900;
+    position:absolute;left:14px;bottom:calc(86px + env(safe-area-inset-bottom,0px));z-index:900;
     background:var(--paper);border:2px solid var(--ink);border-radius:12px;
-    box-shadow:3px 3px 0 var(--ink);padding:9px 11px;max-width:220px;
+    box-shadow:3px 3px 0 var(--ink);padding:9px 11px;max-width:200px;
   }
   .cp-title{font-family:'Fraunces',serif;font-weight:700;font-size:12px;margin-bottom:5px}
   .cp-list{display:flex;flex-direction:column;gap:3px;max-height:150px;overflow:auto}
