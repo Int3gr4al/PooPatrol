@@ -4,12 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>Poo Patrol</title>
-<link rel="manifest" href="manifest.webmanifest"/>
 <meta name="theme-color" content="#5a7d3c"/>
-<link rel="apple-touch-icon" href="apple-touch-icon.png"/>
-<meta name="apple-mobile-web-app-capable" content="yes"/>
-<meta name="apple-mobile-web-app-status-bar-style" content="default"/>
-<meta name="apple-mobile-web-app-title" content="Poo Patrol"/>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
 <link rel="preconnect" href="https://challenges.cloudflare.com"/>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
@@ -57,6 +52,25 @@
     font-family:'Fraunces',serif;font-weight:700;font-size:13px;
     background:var(--ink);color:var(--paper);padding:6px 12px;border-radius:20px;
   }
+  .header-right{display:flex;align-items:center;gap:8px}
+  .auth-btn{
+    font-family:'Fraunces',serif;font-weight:700;font-size:12px;cursor:pointer;
+    background:var(--paper);color:var(--ink);border:2px solid var(--ink);
+    border-radius:20px;padding:5px 12px;box-shadow:2px 2px 0 var(--ink);
+    transition:transform .1s,box-shadow .1s;white-space:nowrap;
+  }
+  .auth-btn:active{transform:translate(1px,1px);box-shadow:1px 1px 0 var(--ink)}
+  .auth-btn.admin{background:var(--moss);color:#fff}
+  /* admin controls in popup */
+  .pop-admin{display:flex;gap:6px;margin-top:8px}
+  .pop-admin button{
+    flex:1;border:2px solid var(--ink);border-radius:8px;padding:7px 4px;cursor:pointer;
+    font-family:'Fraunces',serif;font-weight:700;font-size:12px;
+  }
+  .pop-hide{background:var(--gold);color:var(--ink)}
+  .pop-del{background:var(--clay);color:#fff}
+  .pop-admin button:active{transform:translateY(1px)}
+  .hidden-tag{margin-top:6px;font-size:11px;color:var(--clay);font-weight:700}
 
   #map{flex:1;width:100%;z-index:1;position:relative}
   .leaflet-container{background:#dfdac9;font-family:'Spline Sans Mono',monospace}
@@ -211,7 +225,10 @@
       <div class="logo">💩</div>
       <h1>Poo Patrol<small>Community Hazard Map</small></h1>
     </div>
-    <div class="count" id="count">…</div>
+    <div class="header-right">
+      <div class="count" id="count">…</div>
+      <button type="button" class="auth-btn" id="authBtn" title="Admin sign in">Admin</button>
+    </div>
   </header>
   <div id="map">
     <button type="button" class="locate" id="locateBtn" title="Use my location">📍 My location</button>
@@ -298,6 +315,61 @@ if (configured) {
 } else {
   document.getElementById('configWarn').classList.add('show');
 }
+
+// ---- admin auth ----
+let isAdmin = false;
+let currentUser = null;
+const authBtn = document.getElementById('authBtn');
+
+async function checkAdmin(){
+  if(!sb) return;
+  const { data:{ session } } = await sb.auth.getSession();
+  currentUser = session?.user || null;
+  if(currentUser){
+    // are they in the admins allowlist?
+    const { data, error } = await sb.from('admins').select('user_id').eq('user_id', currentUser.id).maybeSingle();
+    isAdmin = !!data && !error;
+  }else{
+    isAdmin = false;
+  }
+  updateAuthBtn();
+  if(typeof render === 'function') render(); // re-render popups with/without admin tools
+}
+
+function updateAuthBtn(){
+  if(currentUser){
+    authBtn.classList.toggle('admin', isAdmin);
+    authBtn.textContent = isAdmin ? '🛡 Admin · Sign out' : 'Sign out';
+    authBtn.title = currentUser.email || 'Signed in';
+  }else{
+    authBtn.classList.remove('admin');
+    authBtn.textContent = 'Admin';
+    authBtn.title = 'Admin sign in';
+  }
+}
+
+authBtn.addEventListener('click', async ()=>{
+  if(!sb) return;
+  if(currentUser){
+    await sb.auth.signOut();
+    currentUser = null; isAdmin = false;
+    updateAuthBtn();
+    render();
+    banner('Signed out');
+  }else{
+    const { error } = await sb.auth.signInWithOAuth({
+      provider: 'google',
+      options: { redirectTo: window.location.href.split('#')[0] }
+    });
+    if(error) banner('Sign-in failed: ' + error.message, true);
+  }
+});
+
+// react to auth changes (e.g. returning from Google redirect)
+if(sb){
+  sb.auth.onAuthStateChange(()=>{ checkAdmin(); });
+}
+
 
 const map = L.map('map', {zoomControl:true}).setView([51.5074,-0.1278], 14);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
@@ -526,19 +598,29 @@ function popupHtml(r){
   if(r.note) html += `<div>${escapeHtml(r.note)}</div>`;
   if(r.photo_url) html += `<img src="${r.photo_url}">`;
   html += `<div class="meta">${when}</div>`;
+  if(r.hidden){
+    html += `<div class="hidden-tag">🚫 Hidden from public</div>`;
+  }
   if(r.cleaned){
     const cwhen = r.cleaned_at ? new Date(r.cleaned_at).toLocaleDateString() : '';
     html += `<div class="cleaned-tag">✅ Marked cleaned ${cwhen}</div>`;
   }else{
     html += `<button class="pop-clean" onclick="window.markCleaned('${r.id}')">✅ Mark as cleaned</button>`;
   }
+  if(isAdmin){
+    html += `<div class="pop-admin">`;
+    html += `<button class="pop-hide" onclick="window.toggleHide('${r.id}')">${r.hidden ? '👁 Unhide' : '🚫 Hide'}</button>`;
+    html += `<button class="pop-del" onclick="window.deleteReport('${r.id}')">🗑 Delete</button>`;
+    html += `</div>`;
+  }
   html += `</div>`;
   return html;
 }
 
 function addMarker(r){
-  const emoji = r.cleaned ? '✅' : sevEmoji(r.sev);
-  const m = L.marker([r.lat,r.lng], {icon:pinIcon(emoji), opacity: r.cleaned ? 0.55 : 1}).addTo(map);
+  const emoji = r.hidden ? '🚫' : (r.cleaned ? '✅' : sevEmoji(r.sev));
+  const op = (r.hidden || r.cleaned) ? 0.5 : 1;
+  const m = L.marker([r.lat,r.lng], {icon:pinIcon(emoji), opacity: op}).addTo(map);
   m._report = r;
   m.bindPopup(popupHtml(r), {maxWidth:240});
   markers[r.id] = m;
@@ -563,6 +645,45 @@ window.markCleaned = async function(id){
   }catch(err){
     console.error(err);
     banner('Could not update: ' + (err.message||''), true);
+  }
+};
+
+window.toggleHide = async function(id){
+  if(!sb || !isAdmin) return;
+  const rec = allReports.find(r=>r.id===id);
+  const newHidden = !(rec && rec.hidden);
+  try{
+    const { error } = await sb.from('reports').update({ hidden:newHidden }).eq('id', id);
+    if(error) throw error;
+    if(rec) rec.hidden = newHidden;
+    const m = markers[id]; if(m) m.closePopup();
+    render();
+    banner(newHidden ? 'Hidden from public 🚫' : 'Visible again 👁');
+  }catch(err){
+    console.error(err);
+    banner('Could not update: ' + (err.message||''), true);
+  }
+};
+
+window.deleteReport = async function(id){
+  if(!sb || !isAdmin) return;
+  if(!confirm('Permanently delete this report? This cannot be undone.')) return;
+  try{
+    const rec = allReports.find(r=>r.id===id);
+    const { error } = await sb.from('reports').delete().eq('id', id);
+    if(error) throw error;
+    // best-effort remove the photo file
+    if(rec && rec.photo_url){
+      const path = rec.photo_url.split('/photos/')[1];
+      if(path){ try{ await sb.storage.from('photos').remove([path]); }catch(e){} }
+    }
+    allReports = allReports.filter(r=>r.id!==id);
+    const m = markers[id]; if(m){ map.removeLayer(m); delete markers[id]; }
+    render();
+    banner('Report deleted');
+  }catch(err){
+    console.error(err);
+    banner('Could not delete: ' + (err.message||''), true);
   }
 };
 
@@ -622,11 +743,12 @@ function render(){
   activeCount = 0;
   let shown = 0;
   allReports.forEach(r=>{
+    if(r.hidden && !isAdmin) return;          // hidden only visible to admins
     if(r.cleaned && !showCleaned) return;
     if(!passesFilters(r)) return;
     addMarker(r);
     shown++;
-    if(!r.cleaned) activeCount++;
+    if(!r.cleaned && !r.hidden) activeCount++;
   });
   renderHeat();
   refreshCount(shown);
@@ -700,13 +822,7 @@ document.getElementById('filterReset').addEventListener('click', ()=>{
 });
 
 loadAll();
-
-// register service worker for installability + fast loads (https only)
-if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('sw.js').catch(err => console.warn('SW registration failed', err));
-  });
-}
+checkAdmin();
 </script>
 </body>
 </html>
