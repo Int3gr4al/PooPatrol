@@ -87,6 +87,24 @@
   }
   .locate:active{transform:translate(2px,2px);box-shadow:1px 1px 0 var(--ink)}
   .locate:disabled{opacity:.7;cursor:wait}
+  /* show-cleaned toggle */
+  .cleantoggle{
+    position:absolute;top:14px;right:14px;z-index:1000;
+    border:2px solid var(--ink);background:var(--paper);color:var(--ink);
+    border-radius:30px;padding:11px 16px;cursor:pointer;
+    font-family:'Fraunces',serif;font-weight:700;font-size:13px;
+    box-shadow:3px 3px 0 var(--ink);transition:transform .1s,box-shadow .1s;
+  }
+  .cleantoggle:active{transform:translate(2px,2px);box-shadow:1px 1px 0 var(--ink)}
+  .cleantoggle.on{background:var(--moss);color:#fff}
+  /* popup mark-cleaned button + tag */
+  .pop-clean{
+    margin-top:8px;width:100%;background:var(--moss);color:#fff;
+    border:2px solid var(--ink);border-radius:8px;padding:8px;cursor:pointer;
+    font-family:'Fraunces',serif;font-weight:700;font-size:13px;
+  }
+  .pop-clean:active{transform:translateY(1px)}
+  .cleaned-tag{margin-top:8px;font-size:12px;color:var(--moss-dk);font-weight:500}
   .spin{display:inline-block;width:15px;height:15px;border:2px solid var(--ink);
     border-top-color:transparent;border-radius:50%;animation:spin .7s linear infinite;vertical-align:middle}
   @keyframes spin{to{transform:rotate(360deg)}}
@@ -159,6 +177,7 @@
   </header>
   <div id="map">
     <button type="button" class="locate" id="locateBtn" title="Use my location">📍 My location</button>
+    <button type="button" class="cleantoggle" id="cleanToggle" title="Show cleaned reports">👁 Show cleaned</button>
     <div class="fab" id="fab">📍 Report a poo</div>
   </div>
 </div>
@@ -369,8 +388,9 @@ submitBtn.addEventListener('click', async ()=>{
     }).select().single();
     if(error) throw error;
 
+    allReports.unshift(data);
     addMarker(data);
-    total++; refreshCount();
+    activeCount++; refreshCount();
     banner('Reported. Thanks, patroller! 🫡');
     closeSheet();
   }catch(err){
@@ -382,20 +402,84 @@ submitBtn.addEventListener('click', async ()=>{
   }
 });
 
-function addMarker(r){
-  const m = L.marker([r.lat,r.lng], {icon:pinIcon(sevEmoji(r.sev))}).addTo(map);
+const markers = {};   // id -> leaflet marker
+let showCleaned = false;
+
+function popupHtml(r){
   const when = new Date(r.created_at || Date.now()).toLocaleString();
   let html = `<div class="pop"><b>${r.sev}</b>`;
   if(r.note) html += `<div>${escapeHtml(r.note)}</div>`;
   if(r.photo_url) html += `<img src="${r.photo_url}">`;
-  html += `<div class="meta">${when}</div></div>`;
-  m.bindPopup(html, {maxWidth:240});
+  html += `<div class="meta">${when}</div>`;
+  if(r.cleaned){
+    const cwhen = r.cleaned_at ? new Date(r.cleaned_at).toLocaleDateString() : '';
+    html += `<div class="cleaned-tag">✅ Marked cleaned ${cwhen}</div>`;
+  }else{
+    html += `<button class="pop-clean" onclick="window.markCleaned('${r.id}')">✅ Mark as cleaned</button>`;
+  }
+  html += `</div>`;
+  return html;
 }
+
+function addMarker(r){
+  const emoji = r.cleaned ? '✅' : sevEmoji(r.sev);
+  const m = L.marker([r.lat,r.lng], {icon:pinIcon(emoji), opacity: r.cleaned ? 0.55 : 1}).addTo(map);
+  m._report = r;
+  m.bindPopup(popupHtml(r), {maxWidth:240});
+  markers[r.id] = m;
+}
+
+window.markCleaned = async function(id){
+  if(!sb) return;
+  if(!confirm('Mark this poo as cleaned up? It will drop off the map.')) return;
+  try{
+    const cleaned_at = new Date().toISOString();
+    const { error } = await sb.from('reports')
+      .update({ cleaned:true, cleaned_at }).eq('id', id);
+    if(error) throw error;
+
+    const m = markers[id];
+    if(m){
+      m._report.cleaned = true;
+      m._report.cleaned_at = cleaned_at;
+      m.closePopup();
+      if(showCleaned){
+        // keep it but show as cleaned
+        m.setIcon(pinIcon('✅'));
+        m.setOpacity(0.55);
+        m.setPopupContent(popupHtml(m._report));
+      }else{
+        map.removeLayer(m);
+        delete markers[id];
+      }
+    }
+    activeCount = Math.max(0, activeCount - 1);
+    refreshCount();
+    banner('Thanks! Marked as cleaned 🧹');
+  }catch(err){
+    console.error(err);
+    banner('Could not update: ' + (err.message||''), true);
+  }
+};
+
 function escapeHtml(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
 
-let total = 0;
+let activeCount = 0;
 function refreshCount(){
-  document.getElementById('count').textContent = total + (total===1?' report':' reports');
+  document.getElementById('count').textContent = activeCount + (activeCount===1?' report':' reports');
+}
+
+let allReports = [];
+function render(){
+  Object.values(markers).forEach(m=>map.removeLayer(m));
+  for(const k in markers) delete markers[k];
+  activeCount = 0;
+  allReports.forEach(r=>{
+    if(r.cleaned && !showCleaned) return;
+    addMarker(r);
+    if(!r.cleaned) activeCount++;
+  });
+  refreshCount();
 }
 
 async function loadAll(){
@@ -404,15 +488,24 @@ async function loadAll(){
     const { data, error } = await sb.from('reports')
       .select('*').order('created_at',{ascending:false}).limit(2000);
     if(error) throw error;
-    data.forEach(addMarker);
-    total = data.length;
-    refreshCount();
+    allReports = data;
+    render();
   }catch(err){
     console.error(err);
     banner('Could not load reports: ' + (err.message||''), true);
     document.getElementById('count').textContent='—';
   }
 }
+
+// toggle to show/hide cleaned reports
+const cleanToggle = document.getElementById('cleanToggle');
+cleanToggle.addEventListener('click', ()=>{
+  showCleaned = !showCleaned;
+  cleanToggle.classList.toggle('on', showCleaned);
+  cleanToggle.textContent = showCleaned ? '✅ Showing cleaned' : '👁 Show cleaned';
+  render();
+});
+
 loadAll();
 </script>
 </body>
