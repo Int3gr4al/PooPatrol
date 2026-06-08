@@ -225,7 +225,7 @@ navigator.geolocation && navigator.geolocation.getCurrentPosition(
   () => {}, {timeout:5000}
 );
 
-let armed = false, picked = null, photoBlob = null, tempMarker = null;
+let armed = false, picked = null, photoBlob = null, tempMarker = null, justArmedAt = 0;
 const fab = document.getElementById('fab');
 const overlay = document.getElementById('overlay');
 
@@ -234,11 +234,14 @@ function pinIcon(emoji){
 }
 function sevEmoji(s){return s.split(' ')[0];}
 
-fab.addEventListener('click', ()=>{
+fab.addEventListener('click', (e)=>{
+  e.stopPropagation();
   armed = !armed;
   fab.classList.toggle('armed', armed);
+  if(armed) justArmedAt = Date.now();
   fab.textContent = armed ? '👆 Tap the map to place' : '📍 Report a poo';
-  if(!armed) banner('Cancelled');
+  if(armed) banner('Tap the map where the poo is');
+  else banner('Cancelled');
 });
 
 let bannerTimer;
@@ -268,6 +271,8 @@ function placePin(latlng){
 
 map.on('click', e=>{
   if(!armed) return;
+  // ignore a click that lands within 350ms of arming (touch pass-through)
+  if(Date.now() - justArmedAt < 350) return;
   placePin(e.latlng);
 });
 
