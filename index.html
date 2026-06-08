@@ -2,8 +2,14 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>Poo Patrol</title>
+<link rel="manifest" href="manifest.webmanifest"/>
+<meta name="theme-color" content="#5a7d3c"/>
+<link rel="apple-touch-icon" href="apple-touch-icon.png"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-status-bar-style" content="default"/>
+<meta name="apple-mobile-web-app-title" content="Poo Patrol"/>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
 <link rel="preconnect" href="https://challenges.cloudflare.com"/>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
@@ -89,16 +95,33 @@
   }
   .locate:active{transform:translate(2px,2px);box-shadow:1px 1px 0 var(--ink)}
   .locate:disabled{opacity:.7;cursor:wait}
-  /* show-cleaned toggle */
-  .cleantoggle{
-    position:absolute;top:14px;right:14px;z-index:1000;
+  /* top-right control stack */
+  .topright{position:absolute;top:14px;right:14px;z-index:1000;display:flex;flex-direction:column;gap:8px;align-items:flex-end}
+  .ctrl-btn{
     border:2px solid var(--ink);background:var(--paper);color:var(--ink);
     border-radius:30px;padding:11px 16px;cursor:pointer;
-    font-family:'Fraunces',serif;font-weight:700;font-size:13px;
+    font-family:'Fraunces',serif;font-weight:700;font-size:13px;white-space:nowrap;
     box-shadow:3px 3px 0 var(--ink);transition:transform .1s,box-shadow .1s;
   }
-  .cleantoggle:active{transform:translate(2px,2px);box-shadow:1px 1px 0 var(--ink)}
-  .cleantoggle.on{background:var(--moss);color:#fff}
+  .ctrl-btn:active{transform:translate(2px,2px);box-shadow:1px 1px 0 var(--ink)}
+  .ctrl-btn.on{background:var(--moss);color:#fff}
+  .ctrl-btn.active{background:var(--gold)}
+  .filter-panel{
+    display:none;background:var(--paper);border:2px solid var(--ink);
+    border-radius:14px;box-shadow:4px 4px 0 var(--ink);padding:14px;
+    width:210px;text-align:left;
+  }
+  .filter-panel.show{display:block}
+  .fp-group{padding:4px 0;border-bottom:1px solid var(--line);margin-bottom:8px}
+  .fp-group:last-of-type{border-bottom:none;margin-bottom:6px}
+  .fp-title{font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--moss-dk);margin-bottom:6px;font-weight:500}
+  .fp-row{display:flex;align-items:center;gap:8px;font-size:13px;padding:5px 0;cursor:pointer;font-family:'Spline Sans Mono',monospace}
+  .fp-row input{width:16px;height:16px;accent-color:var(--moss);cursor:pointer}
+  .fp-reset{
+    width:100%;border:2px solid var(--ink);background:#fff;color:var(--ink);
+    border-radius:8px;padding:7px;cursor:pointer;font-family:'Fraunces',serif;font-weight:700;font-size:12px;
+  }
+  .fp-reset:active{transform:translateY(1px)}
   /* popup mark-cleaned button + tag */
   .pop-clean{
     margin-top:8px;width:100%;background:var(--moss);color:#fff;
@@ -180,7 +203,23 @@
   </header>
   <div id="map">
     <button type="button" class="locate" id="locateBtn" title="Use my location">📍 My location</button>
-    <button type="button" class="cleantoggle" id="cleanToggle" title="Show cleaned reports">👁 Show cleaned</button>
+    <div class="topright">
+      <button type="button" class="ctrl-btn" id="filterBtn" title="Filter reports">⚙️ Filter</button>
+      <button type="button" class="ctrl-btn" id="cleanToggle" title="Show cleaned reports">👁 Show cleaned</button>
+      <div class="filter-panel" id="filterPanel">
+        <div class="fp-group">
+          <div class="fp-title">Severity</div>
+          <label class="fp-row"><input type="checkbox" data-sev="🟢" checked> 🟢 Minor</label>
+          <label class="fp-row"><input type="checkbox" data-sev="🟡" checked> 🟡 Moderate</label>
+          <label class="fp-row"><input type="checkbox" data-sev="🔴" checked> 🔴 Hazard</label>
+        </div>
+        <div class="fp-group">
+          <label class="fp-row"><input type="checkbox" id="fRecent"> 🕒 Last 7 days only</label>
+          <label class="fp-row"><input type="checkbox" id="fPhoto"> 📷 With photo only</label>
+        </div>
+        <button type="button" class="fp-reset" id="filterReset">Reset filters</button>
+      </div>
+    </div>
     <div class="fab" id="fab">📍 Report a poo</div>
   </div>
 </div>
@@ -447,8 +486,7 @@ submitBtn.addEventListener('click', async ()=>{
 
     const data = out.report;
     allReports.unshift(data);
-    addMarker(data);
-    activeCount++; refreshCount();
+    render();
     banner('Reported. Thanks, patroller! 🫡');
     closeSheet();
   }catch(err){
@@ -499,22 +537,11 @@ window.markCleaned = async function(id){
     if(error) throw error;
 
     const m = markers[id];
-    if(m){
-      m._report.cleaned = true;
-      m._report.cleaned_at = cleaned_at;
-      m.closePopup();
-      if(showCleaned){
-        // keep it but show as cleaned
-        m.setIcon(pinIcon('✅'));
-        m.setOpacity(0.55);
-        m.setPopupContent(popupHtml(m._report));
-      }else{
-        map.removeLayer(m);
-        delete markers[id];
-      }
-    }
-    activeCount = Math.max(0, activeCount - 1);
-    refreshCount();
+    if(m) m.closePopup();
+    // update the source record and re-render so filters/counts stay correct
+    const rec = allReports.find(r=>r.id===id);
+    if(rec){ rec.cleaned = true; rec.cleaned_at = cleaned_at; }
+    render();
     banner('Thanks! Marked as cleaned 🧹');
   }catch(err){
     console.error(err);
@@ -525,21 +552,46 @@ window.markCleaned = async function(id){
 function escapeHtml(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
 
 let activeCount = 0;
-function refreshCount(){
-  document.getElementById('count').textContent = activeCount + (activeCount===1?' report':' reports');
+function refreshCount(shown){
+  const el = document.getElementById('count');
+  if(shown === undefined){ el.textContent = activeCount + (activeCount===1?' report':' reports'); return; }
+  el.textContent = shown + (shown===1?' shown':' shown');
 }
 
 let allReports = [];
+const filters = {
+  sev: { '🟢': true, '🟡': true, '🔴': true },
+  recentOnly: false,
+  withPhoto: false,
+};
+const RECENT_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+function passesFilters(r){
+  // severity
+  if(!filters.sev[sevEmoji(r.sev)]) return false;
+  // recent only
+  if(filters.recentOnly){
+    const t = new Date(r.created_at || 0).getTime();
+    if(Date.now() - t > RECENT_MS) return false;
+  }
+  // with photo only
+  if(filters.withPhoto && !r.photo_url) return false;
+  return true;
+}
+
 function render(){
   Object.values(markers).forEach(m=>map.removeLayer(m));
   for(const k in markers) delete markers[k];
   activeCount = 0;
+  let shown = 0;
   allReports.forEach(r=>{
     if(r.cleaned && !showCleaned) return;
+    if(!passesFilters(r)) return;
     addMarker(r);
+    shown++;
     if(!r.cleaned) activeCount++;
   });
-  refreshCount();
+  refreshCount(shown);
 }
 
 async function loadAll(){
@@ -566,7 +618,57 @@ cleanToggle.addEventListener('click', ()=>{
   render();
 });
 
+// filter panel
+const filterBtn = document.getElementById('filterBtn');
+const filterPanel = document.getElementById('filterPanel');
+filterBtn.addEventListener('click', ()=>{
+  filterPanel.classList.toggle('show');
+});
+// close panel when tapping outside it
+document.addEventListener('click', (e)=>{
+  if(!filterPanel.contains(e.target) && e.target !== filterBtn && !filterBtn.contains(e.target)){
+    filterPanel.classList.remove('show');
+  }
+});
+
+function filtersActive(){
+  return !filters.sev['🟢'] || !filters.sev['🟡'] || !filters.sev['🔴'] ||
+         filters.recentOnly || filters.withPhoto;
+}
+function syncFilterBtn(){
+  filterBtn.classList.toggle('active', filtersActive());
+  filterBtn.textContent = filtersActive() ? '⚙️ Filter •' : '⚙️ Filter';
+}
+
+document.querySelectorAll('#filterPanel input[data-sev]').forEach(cb=>{
+  cb.addEventListener('change', ()=>{
+    filters.sev[cb.getAttribute('data-sev')] = cb.checked;
+    syncFilterBtn(); render();
+  });
+});
+document.getElementById('fRecent').addEventListener('change', e=>{
+  filters.recentOnly = e.target.checked; syncFilterBtn(); render();
+});
+document.getElementById('fPhoto').addEventListener('change', e=>{
+  filters.withPhoto = e.target.checked; syncFilterBtn(); render();
+});
+document.getElementById('filterReset').addEventListener('click', ()=>{
+  filters.sev = { '🟢':true, '🟡':true, '🔴':true };
+  filters.recentOnly = false; filters.withPhoto = false;
+  document.querySelectorAll('#filterPanel input[data-sev]').forEach(cb=>cb.checked=true);
+  document.getElementById('fRecent').checked = false;
+  document.getElementById('fPhoto').checked = false;
+  syncFilterBtn(); render();
+});
+
 loadAll();
+
+// register service worker for installability + fast loads (https only)
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('sw.js').catch(err => console.warn('SW registration failed', err));
+  });
+}
 </script>
 </body>
 </html>
