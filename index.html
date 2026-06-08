@@ -125,7 +125,7 @@
   .fp-reset:active{transform:translateY(1px)}
   /* heat legend */
   .heat-legend{
-    position:absolute;left:14px;top:66px;z-index:900;
+    position:absolute;right:14px;bottom:calc(86px + env(safe-area-inset-bottom,0px));z-index:900;
     background:var(--paper);border:2px solid var(--ink);border-radius:12px;
     box-shadow:3px 3px 0 var(--ink);padding:7px 9px;
     display:flex;flex-direction:column;gap:3px;
