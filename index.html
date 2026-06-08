@@ -13,6 +13,7 @@
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
 <link rel="preconnect" href="https://challenges.cloudflare.com"/>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.heat/0.2.0/leaflet-heat.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
 <style>
@@ -122,6 +123,17 @@
     border-radius:8px;padding:7px;cursor:pointer;font-family:'Fraunces',serif;font-weight:700;font-size:12px;
   }
   .fp-reset:active{transform:translateY(1px)}
+  /* heat legend */
+  .heat-legend{
+    position:absolute;left:14px;bottom:calc(14px + env(safe-area-inset-bottom,0px));z-index:1000;
+    background:var(--paper);border:2px solid var(--ink);border-radius:12px;
+    box-shadow:3px 3px 0 var(--ink);padding:8px 10px;
+    display:flex;flex-direction:column;gap:4px;
+  }
+  .hl-label{font-family:'Fraunces',serif;font-weight:700;font-size:12px}
+  .hl-bar{width:120px;height:9px;border:1px solid var(--ink);border-radius:5px;
+    background:linear-gradient(90deg,#5a7d3c,#d8a838,#b5582f,#7a1f0c)}
+  .hl-ends{font-size:10px;color:var(--moss-dk);display:flex;justify-content:space-between}
   /* popup mark-cleaned button + tag */
   .pop-clean{
     margin-top:8px;width:100%;background:var(--moss);color:#fff;
@@ -221,6 +233,11 @@
       </div>
     </div>
     <div class="fab" id="fab">📍 Report a poo</div>
+    <div class="heat-legend">
+      <span class="hl-label">Hotspots</span>
+      <span class="hl-bar"></span>
+      <span class="hl-ends"><span>low</span><span>high</span></span>
+    </div>
   </div>
 </div>
 
@@ -579,6 +596,26 @@ function passesFilters(r){
   return true;
 }
 
+// ---- hotspot heat layer (all reports, incl. cleaned; ignores pin filters) ----
+let heatLayer = null;
+function renderHeat(){
+  if(typeof L.heatLayer !== 'function') return; // plugin not loaded
+  const points = allReports.map(r => {
+    // weight hazards a bit heavier so serious spots glow more
+    const w = r.sev && r.sev.startsWith('🔴') ? 1.0
+            : r.sev && r.sev.startsWith('🟡') ? 0.7 : 0.5;
+    return [r.lat, r.lng, w];
+  });
+  if(heatLayer){
+    heatLayer.setLatLngs(points);
+  }else{
+    heatLayer = L.heatLayer(points, {
+      radius: 28, blur: 20, maxZoom: 17, minOpacity: 0.25,
+      gradient: {0.2:'#5a7d3c', 0.45:'#d8a838', 0.7:'#b5582f', 1.0:'#7a1f0c'}
+    }).addTo(map);
+  }
+}
+
 function render(){
   Object.values(markers).forEach(m=>map.removeLayer(m));
   for(const k in markers) delete markers[k];
@@ -591,6 +628,7 @@ function render(){
     shown++;
     if(!r.cleaned) activeCount++;
   });
+  renderHeat();
   refreshCount(shown);
 }
 
