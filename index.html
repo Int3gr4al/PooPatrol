@@ -5,8 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Poo Patrol</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
+<link rel="preconnect" href="https://challenges.cloudflare.com"/>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700;9..144,900&family=Spline+Sans+Mono:wght@400;500&display=swap');
 
@@ -105,6 +107,7 @@
   }
   .pop-clean:active{transform:translateY(1px)}
   .cleaned-tag{margin-top:8px;font-size:12px;color:var(--moss-dk);font-weight:500}
+  .turnstile-box{margin-top:16px;min-height:0;display:flex;justify-content:center}
   .spin{display:inline-block;width:15px;height:15px;border:2px solid var(--ink);
     border-top-color:transparent;border-radius:50%;animation:spin .7s linear infinite;vertical-align:middle}
   @keyframes spin{to{transform:rotate(360deg)}}
@@ -203,6 +206,8 @@
       <input type="file" id="photoInput" accept="image/*" capture="environment">
     </div>
 
+    <div id="turnstile-box" class="turnstile-box"></div>
+
     <div class="actions">
       <button class="btn btn-cancel" id="cancel">Cancel</button>
       <button class="btn btn-submit" id="submit">Submit</button>
@@ -224,7 +229,11 @@
    ============================================================ */
 const SUPABASE_URL      = "https://vmoltbdihnkxepvtyobu.supabase.co";   // e.g. https://abcd1234.supabase.co
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZtb2x0YmRpaG5reGVwdnR5b2J1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA1MDA0NzQsImV4cCI6MjA5NjA3NjQ3NH0.spDLNRc3jyH0XKvRcthLXKvhkgUmQuV3jv4C8MYwLps";
+const TURNSTILE_SITE_KEY = "0x4AAAAAADgsach6mK7gtE6-"; // public site key from Cloudflare
 /* ============================================================ */
+
+// Edge Function endpoint that verifies the captcha and inserts the report
+const SUBMIT_URL = SUPABASE_URL.replace(/\/$/, "") + "/functions/v1/submit-report";
 
 const configured = SUPABASE_URL.startsWith("http") && SUPABASE_ANON_KEY.length > 20;
 let sb = null;
@@ -273,6 +282,33 @@ function banner(text, isErr){
   bannerTimer = setTimeout(()=>b.remove(), isErr ? 4000 : 2200);
 }
 
+// ---- Turnstile widget management ----
+let turnstileId = null;
+let turnstileToken = null;
+
+function renderTurnstile(){
+  const box = document.getElementById('turnstile-box');
+  if(!window.turnstile || TURNSTILE_SITE_KEY.startsWith('YOUR_')){ return; }
+  // (re)create the widget each time the sheet opens so tokens are fresh
+  box.innerHTML = '';
+  turnstileToken = null;
+  turnstileId = window.turnstile.render(box, {
+    sitekey: TURNSTILE_SITE_KEY,
+    callback: (t)=>{ turnstileToken = t; },
+    'expired-callback': ()=>{ turnstileToken = null; },
+    'error-callback': ()=>{ turnstileToken = null; },
+  });
+}
+function resetTurnstile(){
+  turnstileToken = null;
+  if(window.turnstile && turnstileId !== null){
+    try{ window.turnstile.remove(turnstileId); }catch(e){}
+    turnstileId = null;
+  }
+  const box = document.getElementById('turnstile-box');
+  if(box) box.innerHTML = '';
+}
+
 // open the report sheet at a given location (shared by map-tap and "use my location")
 function placePin(latlng){
   picked = latlng;
@@ -286,6 +322,7 @@ function placePin(latlng){
   document.getElementById('coords').textContent =
     `${picked.lat.toFixed(5)}, ${picked.lng.toFixed(5)}  ·  drag pin to adjust`;
   overlay.classList.add('show');
+  renderTurnstile();
 }
 
 map.on('click', e=>{
@@ -358,18 +395,27 @@ function closeSheet(){
   document.getElementById('photoText').textContent='📷 Tap to add a photo';
   let prev=document.querySelector('#photoZone img'); if(prev) prev.remove();
   armed=false; fab.classList.remove('armed'); fab.textContent='📍 Report a poo';
+  resetTurnstile();
 }
 document.getElementById('cancel').addEventListener('click', closeSheet);
 
 const submitBtn = document.getElementById('submit');
 submitBtn.addEventListener('click', async ()=>{
   if(!picked || !sb) return;
+
+  // require a captcha token (unless Turnstile isn't configured yet)
+  const turnstileConfigured = !TURNSTILE_SITE_KEY.startsWith('YOUR_');
+  if(turnstileConfigured && !turnstileToken){
+    banner('Please complete the “I’m human” check', true);
+    return;
+  }
+
   submitBtn.disabled = true;
   submitBtn.textContent = 'Saving…';
   try{
     let photo_url = null;
 
-    // 1. upload photo if present
+    // 1. upload photo if present (storage upload stays direct)
     if(photoBlob){
       const path = `${Date.now()}_${Math.random().toString(36).slice(2,8)}.jpg`;
       const { error: upErr } = await sb.storage.from('photos')
@@ -379,15 +425,27 @@ submitBtn.addEventListener('click', async ()=>{
       photo_url = pub.publicUrl;
     }
 
-    // 2. insert report row
-    const { data, error } = await sb.from('reports').insert({
-      lat:picked.lat, lng:picked.lng,
-      sev:document.getElementById('sev').value,
-      note:document.getElementById('note').value.trim() || null,
-      photo_url
-    }).select().single();
-    if(error) throw error;
+    // 2. send report through the Edge Function (verifies captcha, then inserts)
+    const res = await fetch(SUBMIT_URL, {
+      method:'POST',
+      headers:{
+        'Content-Type':'application/json',
+        'Authorization':'Bearer ' + SUPABASE_ANON_KEY,
+        'apikey': SUPABASE_ANON_KEY,
+      },
+      body: JSON.stringify({
+        token: turnstileToken,
+        lat: picked.lat,
+        lng: picked.lng,
+        sev: document.getElementById('sev').value,
+        note: document.getElementById('note').value.trim() || null,
+        photo_url,
+      }),
+    });
+    const out = await res.json().catch(()=> ({}));
+    if(!res.ok) throw new Error(out.error || ('Request failed ('+res.status+')'));
 
+    const data = out.report;
     allReports.unshift(data);
     addMarker(data);
     activeCount++; refreshCount();
@@ -396,6 +454,8 @@ submitBtn.addEventListener('click', async ()=>{
   }catch(err){
     console.error(err);
     banner('Save failed: ' + (err.message || 'unknown error'), true);
+    // get a fresh captcha token for the retry
+    if(window.turnstile && turnstileId !== null){ try{ window.turnstile.reset(turnstileId); turnstileToken=null; }catch(e){} }
   }finally{
     submitBtn.disabled = false;
     submitBtn.textContent = 'Submit';
