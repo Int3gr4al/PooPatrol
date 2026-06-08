@@ -148,6 +148,17 @@
   .hl-bar{width:104px;height:8px;border:1px solid var(--ink);border-radius:5px;
     background:linear-gradient(90deg,#5a7d3c,#d8a838,#b5582f,#7a1f0c)}
   .hl-ends{font-size:9px;color:var(--moss-dk);display:flex;justify-content:space-between}
+  /* by-council tally panel */
+  .council-panel{
+    position:absolute;left:14px;bottom:calc(14px + env(safe-area-inset-bottom,0px));z-index:900;
+    background:var(--paper);border:2px solid var(--ink);border-radius:12px;
+    box-shadow:3px 3px 0 var(--ink);padding:9px 11px;max-width:220px;
+  }
+  .cp-title{font-family:'Fraunces',serif;font-weight:700;font-size:12px;margin-bottom:5px}
+  .cp-list{display:flex;flex-direction:column;gap:3px;max-height:150px;overflow:auto}
+  .cp-row{display:flex;justify-content:space-between;gap:10px;font-size:12px}
+  .cp-row b{font-weight:700}
+  .cp-note{font-size:9px;color:var(--moss-dk);margin-top:5px}
   /* popup mark-cleaned button + tag */
   .pop-clean{
     margin-top:8px;width:100%;background:var(--moss);color:#fff;
@@ -234,6 +245,7 @@
     <button type="button" class="locate" id="locateBtn" title="Use my location">📍 My location</button>
     <div class="topright">
       <button type="button" class="ctrl-btn" id="filterBtn" title="Filter reports">⚙️ Filter</button>
+      <button type="button" class="ctrl-btn on" id="boundaryBtn" title="Toggle council boundary">🗺 Boundary</button>
       <button type="button" class="ctrl-btn" id="cleanToggle" title="Show cleaned reports">👁 Show cleaned</button>
       <div class="filter-panel" id="filterPanel">
         <div class="fp-group">
@@ -254,6 +266,11 @@
       <span class="hl-label">Hotspots</span>
       <span class="hl-bar"></span>
       <span class="hl-ends"><span>low</span><span>high</span></span>
+    </div>
+    <div class="council-panel" id="councilPanel" style="display:none">
+      <div class="cp-title">Reports by council</div>
+      <div class="cp-list" id="councilList"></div>
+      <div class="cp-note">districts loaded so far</div>
     </div>
   </div>
 </div>
@@ -373,13 +390,103 @@ if(sb){
 
 const map = L.map('map', {zoomControl:true}).setView([51.5074,-0.1278], 14);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
-  attribution:'© OpenStreetMap', maxZoom:19
+  attribution:'© OpenStreetMap | Contains National Statistics and OS data © Crown copyright and database right 2024',
+  maxZoom:19
 }).addTo(map);
 
 navigator.geolocation && navigator.geolocation.getCurrentPosition(
   p => map.setView([p.coords.latitude, p.coords.longitude], 16),
   () => {}, {timeout:5000}
 );
+
+// ---- council district boundaries (ONS Open Geography, OGL) ----
+// Loads only districts intersecting the current map view, caching as it goes.
+const ONS_QUERY = "https://services1.arcgis.com/ESMARspQHYMw9BZ9/arcgis/rest/services/" +
+                  "Local_Authority_Districts_May_2024_Boundaries_UK_BGC/FeatureServer/0/query";
+const MIN_BOUNDARY_ZOOM = 9;   // don't fetch when zoomed too far out (would pull too many)
+
+let boundaryShown = true;
+let districtTally = {};         // LAD24NM -> active report count
+const districtCache = {};      // LAD24NM -> { feature, geom }
+let boundaryLayerGroup = L.layerGroup();
+let boundaryFetchTimer = null;
+let boundaryAbort = null;
+
+function styleFor(){
+  return { color:'#415c29', weight:2.5, fill:true, fillColor:'#5a7d3c', fillOpacity:0.05, dashArray:'6 4' };
+}
+
+async function fetchDistrictsInView(){
+  if(map.getZoom() < MIN_BOUNDARY_ZOOM) return;   // too zoomed out
+  const b = map.getBounds();
+  // ArcGIS envelope spatial query (xmin,ymin,xmax,ymax in WGS84)
+  const env = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()].join(',');
+  const url = ONS_QUERY +
+    "?where=1%3D1" +
+    "&geometry=" + encodeURIComponent(env) +
+    "&geometryType=esriGeometryEnvelope&inSR=4326&spatialRel=esriSpatialRelIntersects" +
+    "&outFields=LAD24NM&outSR=4326&f=geojson";
+  try{
+    if(boundaryAbort) boundaryAbort.abort();
+    boundaryAbort = new AbortController();
+    const res = await fetch(url, { signal: boundaryAbort.signal });
+    const geo = await res.json();
+    if(!geo.features) return;
+    let added = false;
+    for(const f of geo.features){
+      const name = f.properties && f.properties.LAD24NM;
+      if(!name || districtCache[name]) continue;
+      districtCache[name] = { feature:f, geom:f.geometry };
+      added = true;
+      const layer = L.geoJSON(f, { style: styleFor() });
+      layer.bindTooltip(name, {sticky:true});
+      layer._districtName = name;
+      boundaryLayerGroup.addLayer(layer);
+    }
+    if(boundaryShown && !map.hasLayer(boundaryLayerGroup)) boundaryLayerGroup.addTo(map);
+    if(added && typeof render === 'function') render(); // refresh counts with new districts
+  }catch(err){
+    if(err.name !== 'AbortError') console.warn('Boundary fetch failed', err);
+  }
+}
+
+function scheduleBoundaryFetch(){
+  if(!boundaryShown) return;
+  clearTimeout(boundaryFetchTimer);
+  boundaryFetchTimer = setTimeout(fetchDistrictsInView, 400); // debounce panning
+}
+map.on('moveend zoomend', scheduleBoundaryFetch);
+
+// ray-casting point-in-polygon; handles Polygon and MultiPolygon
+function pointInRing(lng, lat, ring){
+  let inside = false;
+  for(let i=0, j=ring.length-1; i<ring.length; j=i++){
+    const xi=ring[i][0], yi=ring[i][1], xj=ring[j][0], yj=ring[j][1];
+    const intersect = ((yi>lat)!==(yj>lat)) && (lng < (xj-xi)*(lat-yi)/(yj-yi)+xi);
+    if(intersect) inside = !inside;
+  }
+  return inside;
+}
+function pointInPolygon(lng, lat, geom){
+  const polys = geom.type === 'Polygon' ? [geom.coordinates] : geom.coordinates;
+  for(const poly of polys){
+    if(!poly.length) continue;
+    if(pointInRing(lng, lat, poly[0])){
+      let inHole = false;
+      for(let h=1; h<poly.length; h++){ if(pointInRing(lng, lat, poly[h])){ inHole = true; break; } }
+      if(!inHole) return true;
+    }
+  }
+  return false;
+}
+// returns the district name a point falls in, or null if none loaded/match
+function districtOf(lat, lng){
+  for(const name in districtCache){
+    if(pointInPolygon(lng, lat, districtCache[name].geom)) return name;
+  }
+  return null;
+}
+
 
 let armed = false, picked = null, photoBlob = null, tempMarker = null, justArmedAt = 0;
 const fab = document.getElementById('fab');
@@ -696,6 +803,17 @@ function refreshCount(shown){
   el.textContent = shown + (shown===1?' shown':' shown');
 }
 
+function updateDistrictPanel(){
+  const panel = document.getElementById('councilPanel');
+  const list = document.getElementById('councilList');
+  const names = Object.keys(districtTally).sort((a,b)=>districtTally[b]-districtTally[a]);
+  if(!boundaryShown || !names.length){ panel.style.display='none'; return; }
+  panel.style.display='block';
+  list.innerHTML = names.slice(0,8).map(n =>
+    `<div class="cp-row"><span>${escapeHtml(n)}</span><b>${districtTally[n]}</b></div>`
+  ).join('');
+}
+
 let allReports = [];
 const filters = {
   sev: { '🟢': true, '🟡': true, '🔴': true },
@@ -742,16 +860,22 @@ function render(){
   for(const k in markers) delete markers[k];
   activeCount = 0;
   let shown = 0;
+  districtTally = {};
   allReports.forEach(r=>{
     if(r.hidden && !isAdmin) return;          // hidden only visible to admins
     if(r.cleaned && !showCleaned) return;
     if(!passesFilters(r)) return;
     addMarker(r);
     shown++;
-    if(!r.cleaned && !r.hidden) activeCount++;
+    if(!r.cleaned && !r.hidden){
+      activeCount++;
+      const d = districtOf(r.lat, r.lng);
+      if(d) districtTally[d] = (districtTally[d]||0) + 1;
+    }
   });
   renderHeat();
   refreshCount(shown);
+  updateDistrictPanel();
 }
 
 async function loadAll(){
@@ -776,6 +900,20 @@ cleanToggle.addEventListener('click', ()=>{
   cleanToggle.classList.toggle('on', showCleaned);
   cleanToggle.textContent = showCleaned ? '✅ Showing cleaned' : '👁 Show cleaned';
   render();
+});
+
+// boundary toggle
+const boundaryBtn = document.getElementById('boundaryBtn');
+boundaryBtn.addEventListener('click', ()=>{
+  boundaryShown = !boundaryShown;
+  boundaryBtn.classList.toggle('on', boundaryShown);
+  if(boundaryShown){
+    boundaryLayerGroup.addTo(map);
+    fetchDistrictsInView();
+  }else{
+    map.removeLayer(boundaryLayerGroup);
+  }
+  updateDistrictPanel();
 });
 
 // filter panel
@@ -823,6 +961,7 @@ document.getElementById('filterReset').addEventListener('click', ()=>{
 
 loadAll();
 checkAdmin();
+fetchDistrictsInView();
 </script>
 </body>
 </html>
